@@ -1,5 +1,7 @@
+{{- self.add_import("java.lang.ref.Cleaner") }}
 {{- self.add_import("java.util.concurrent.atomic.AtomicLong") }}
 {{- self.add_import("java.util.concurrent.atomic.AtomicBoolean") }}
+
 // The base class for all UniFFI Object types.
 //
 // This class provides core operations for working with the Rust `Arc<T>` pointer to
@@ -71,13 +73,23 @@
 // called *and* all in-flight method calls have completed, avoiding violating any of the expectations
 // of the underlying Rust code.
 //
-// In the future we may be able to replace some of this with automatic finalization logic, such as using
-// the new "Cleaner" functionaility in Java 9. The above scheme has been designed to work even if `destroy` is
-// invoked by garbage-collection machinery rather than by calling code (which by the way, it's apparently also
-// possible for the JVM to finalize an object while there is an in-flight call to one of its methods [1],
-// so there would still be some complexity here).
+// The `destroy` method is implemented in terms of a `Cleaner.Cleanable`, and it is a `CleanAction`
+// that actually calls into to Rust. In this manner, we're able repeat whatever guarantees `java.ref.Cleaner`
+// makes about cleaning up these "native peers".
 //
-// Sigh...all of this for want of a robust finalization mechanism.
+// A cleaner makes a better alternative to _not_ calling `destroy()` as
+// and when the object is finished with, but the abstraction is not perfect: if the Rust object's `drop`
+// method is slow, and/or there are many objects to cleanup, and it's on a low end Android device, then the cleaner
+// thread may be starved, and the app will leak memory.
+//
+// In this case, `destroy`ing manually may be a better solution.
+//
+// The cleaner can live side by side with the manual calling of `destroy`. In the order of preference, uniffi objects
+// with Rust peers can be reclaimed:
+//
+// 1. By calling the `destroy` method of the object, which calls `rustObject.free()`. If that doesn't happen:
+// 2. When the object becomes unreachable, AND the Cleaner thread gets to call `rustObject.free()`. If the thread is starved then:
+// 3. The memory is reclaimed when the process terminates.
 //
 // [1] https://stackoverflow.com/questions/24376768/can-java-finalize-an-object-when-it-is-still-in-scope/24380219
 //
@@ -101,13 +113,10 @@ abstract class FFIObject: Disposable, AutoCloseable {
     }
 
     protected val pointer: Pointer?
+    protected abstract val cleanable: Cleaner.Cleanable
 
     private val wasDestroyed = AtomicBoolean(false)
     private val callCounter = AtomicLong(1)
-
-    open protected fun freeRustArcPtr() {
-        // To be overridden in subclasses.
-    }
 
     override fun destroy() {
         // Only allow a single call to this method.
@@ -115,7 +124,7 @@ abstract class FFIObject: Disposable, AutoCloseable {
         if (this.wasDestroyed.compareAndSet(false, true)) {
             // This decrement always matches the initial count of 1 given at creation time.
             if (this.callCounter.decrementAndGet() == 0L) {
-                this.freeRustArcPtr()
+                cleanable.clean()
             }
         }
     }
@@ -143,7 +152,7 @@ abstract class FFIObject: Disposable, AutoCloseable {
         } finally {
             // This decrement always matches the increment we performed above.
             if (this.callCounter.decrementAndGet() == 0L) {
-                this.freeRustArcPtr()
+                cleanable.clean()
             }
         }
     }

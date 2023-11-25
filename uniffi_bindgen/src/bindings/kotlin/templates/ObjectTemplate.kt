@@ -29,18 +29,16 @@ open class {{ impl_class_name }} : FFIObject, {{ interface_name }} {
     {%- when None %}
     {%- endmatch %}
 
-    /**
-     * Disconnect the object from the underlying Rust object.
-     *
-     * It can be called more than once, but once called, interacting with the object
-     * causes an `IllegalStateException`.
-     *
-     * Clients **must** call this method once done with the object, or cause a memory leak.
-     */
-    override protected fun freeRustArcPtr() {
-        this.pointer?.let { ptr ->
-            rustCall() { status ->
-                _UniFFILib.INSTANCE.{{ obj.ffi_object_free().name() }}(ptr, status)
+    override val cleanable: Cleaner.Cleanable = _UniFFILib.CLEANER.register(this, UniffiCleanAction(pointer))
+
+    // Use a static inner class instead of a closure so as not to accidentally
+    // capture `this` as part of the cleanable's action.
+    private class UniffiCleanAction(private val pointer: Pointer?) : Runnable {
+        override fun run() {
+            pointer?.let { ptr ->
+                rustCall { status ->
+                    _UniFFILib.INSTANCE.{{ obj.ffi_object_free().name() }}(ptr, status)
+                }
             }
         }
     }
