@@ -1,5 +1,6 @@
 {%- let obj = ci|get_object_definition(name) %}
 {%- if self.include_once_check("ObjectRuntime.kt") %}{% include "ObjectRuntime.kt" %}{% endif %}
+{% if config.android_cleaner() && self.include_once_check("AndroidCleaner.kt") %}{% include "AndroidCleaner.kt" %}{% endif %}
 {%- let (interface_name, impl_class_name) = obj|object_names(ci) %}
 {%- let methods = obj.methods() %}
 {%- let interface_docstring = obj.docstring() %}
@@ -29,7 +30,7 @@ open class {{ impl_class_name }} : FFIObject, {{ interface_name }} {
     {%- when None %}
     {%- endmatch %}
 
-    override val cleanable: Cleaner.Cleanable = _UniFFILib.CLEANER.register(this, UniffiCleanAction(pointer))
+    override val cleanable: {% if config.android_cleaner() -%} AndroidCleanable {%- else -%} Cleaner.Cleanable {%- endif %} = _UniFFILib.CLEANER.register(this, UniffiCleanAction(pointer))
 
     // Use a static inner class instead of a closure so as not to accidentally
     // capture `this` as part of the cleanable's action.
